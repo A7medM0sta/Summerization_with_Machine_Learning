@@ -1,4 +1,6 @@
 # Prepare libraries and data
+import os
+import pickle
 import nltk
 import re
 import heapq
@@ -14,6 +16,14 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.metrics import accuracy_score
 
 # Text categories
@@ -151,49 +161,112 @@ class DataLoader:
 
 # Model Trainer Class
 class ModelTrainer:
-    def __init__(self, models):
+    def __init__(self, models, checkpoint_dir):
         self.models = models
+        self.checkpoint_dir = checkpoint_dir
 
     def tfidf_features(self, X_train, X_test, ngram_range):
         tfidf_vectorizer = TfidfVectorizer(min_df=2, max_df=0.5, ngram_range=(1, ngram_range))
         X_train = tfidf_vectorizer.fit_transform(X_train)
         X_test = tfidf_vectorizer.transform(X_test)
-        return X_train, X_test
+        return X_train, X_test, tfidf_vectorizer
 
-    def train_and_evaluate(self, X_train, X_test, y_train, y_test):
+    def save_checkpoint(self, model, vectorizer, model_name, dataset_name):
+        model_path = os.path.join(self.checkpoint_dir, f'{model_name}_{dataset_name}_model.pkl')
+        vectorizer_path = os.path.join(self.checkpoint_dir, f'{model_name}_{dataset_name}_vectorizer.pkl')
+
+        with open(model_path, 'wb') as model_file:
+            pickle.dump(model, model_file)
+
+        with open(vectorizer_path, 'wb') as vectorizer_file:
+            pickle.dump(vectorizer, vectorizer_file)
+
+    def load_checkpoint(self, model_name, dataset_name):
+        model_path = os.path.join(self.checkpoint_dir, f'{model_name}_{dataset_name}_model.pkl')
+        vectorizer_path = os.path.join(self.checkpoint_dir, f'{model_name}_{dataset_name}_vectorizer.pkl')
+
+        if os.path.exists(model_path) and os.path.exists(vectorizer_path):
+            with open(model_path, 'rb') as model_file:
+                model = pickle.load(model_file)
+
+            with open(vectorizer_path, 'rb') as vectorizer_file:
+                vectorizer = pickle.load(vectorizer_file)
+
+            return model, vectorizer
+        else:
+            return None, None
+
+    def train_and_evaluate(self, X_train, X_test, y_train, y_test, dataset_name):
         accuracies = {}
+
         for model_name, model in self.models.items():
-            X_train_tfidf, X_test_tfidf = self.tfidf_features(X_train, X_test, 2)
-            model.fit(X_train_tfidf, y_train)
-            y_pred = model.predict(X_test_tfidf)
-            accuracy = accuracy_score(y_test, y_pred)
+            loaded_model, loaded_vectorizer = self.load_checkpoint(model_name, dataset_name)
+
+            if loaded_model and loaded_vectorizer:
+                X_train_vec = loaded_vectorizer.transform(X_train)
+                X_test_vec = loaded_vectorizer.transform(X_test)
+                accuracy = accuracy_score(y_test, loaded_model.predict(X_test_vec))
+                print(f"Loaded {model_name} for {dataset_name} dataset. Accuracy: {accuracy:.4f}")
+            else:
+                X_train_vec, X_test_vec, tfidf_vectorizer = self.tfidf_features(X_train, X_test, 2)
+                model.fit(X_train_vec, y_train)
+                accuracy = accuracy_score(y_test, model.predict(X_test_vec))
+                print(f"Trained {model_name} for {dataset_name} dataset. Accuracy: {accuracy:.4f}")
+                self.save_checkpoint(model, tfidf_vectorizer, model_name, dataset_name)
+
             accuracies[model_name] = accuracy
+
         return accuracies
 
     def plot_accuracies(self, accuracies):
+        model_names = list(accuracies.keys())
+        accuracy_values = list(accuracies.values())
+
         plt.figure(figsize=(10, 5))
-        plt.bar(accuracies.keys(), accuracies.values())
+        plt.bar(model_names, accuracy_values, color='skyblue')
+        plt.xlabel('Models')
         plt.ylabel('Accuracy')
-        plt.title('Model Accuracy Comparison')
+        plt.title('Model Accuracies')
+        plt.xticks(rotation=45)
         plt.show()
 
-# Main Function to Execute All Steps
+# Main function
 def main():
-    data_loader = DataLoader("data/bbc_news_dataset.csv", "data/arabic_dataset.csv")
+    nltk.download('punkt')
+    nltk.download('stopwords')
+
+    en_path = 'data/bbc_news_dataset.csv'
+    ar_path = 'data/arabic_dataset.csv'
+    checkpoint_dir = 'models'
+
+    if not os.path.exists(checkpoint_dir):
+        os.makedirs(checkpoint_dir)
+
+    data_loader = DataLoader(en_path, ar_path)
     data_loader.clean_data()
     data_loader.process_data()
     data_loader.encode_labels()
+
     en_X_train, en_X_test, en_y_train, en_y_test, ar_X_train, ar_X_test, ar_y_train, ar_y_test = data_loader.split_data()
 
     models = {
         'Naive Bayes': MultinomialNB(),
         'Logistic Regression': LogisticRegression(max_iter=1000),
-        'SVM': SVC()
+        'SVM': SVC(),
+        'Random Forest': RandomForestClassifier(),
+        'Gradient Boosting': GradientBoostingClassifier(),
+        'XGBoost': XGBClassifier(),
+        'LightGBM': LGBMClassifier(),
+        'KNN': KNeighborsClassifier(),
+        'Decision Tree': DecisionTreeClassifier(),
+        'MLP': MLPClassifier(max_iter=1000),
+        'AdaBoost': AdaBoostClassifier(),
+        'Extra Trees': ExtraTreesClassifier()
     }
 
-    model_trainer = ModelTrainer(models)
-    en_accuracies = model_trainer.train_and_evaluate(en_X_train, en_X_test, en_y_train, en_y_test)
-    ar_accuracies = model_trainer.train_and_evaluate(ar_X_train, ar_X_test, ar_y_train, ar_y_test)
+    model_trainer = ModelTrainer(models, checkpoint_dir)
+    en_accuracies = model_trainer.train_and_evaluate(en_X_train, en_X_test, en_y_train, en_y_test, 'English')
+    ar_accuracies = model_trainer.train_and_evaluate(ar_X_train, ar_X_test, ar_y_train, ar_y_test, 'Arabic')
 
     print("English Dataset Accuracies:")
     print(en_accuracies)
@@ -205,4 +278,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

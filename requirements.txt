@@ -1,0 +1,8 @@
+pandas~=2.2.2
+matplotlib
+flask
+nltk
+bs4
+scikit-learn
+xgboost
+lightgbm
